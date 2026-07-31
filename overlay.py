@@ -419,6 +419,9 @@ class ZoneOverlay(QWidget):
             else:
                 name, ok = QInputDialog.getText(None, "Zone label", "Label for this zone:")
                 z["name"] = (name or "Zone").strip() or "Zone" if ok else "Zone"
+                # new zones auto-keep their icons by default
+                z["pin"] = True
+                z["icons"] = self.hooks["capture_icons"](z)
         elif mode == "move" and orig:
             dx, dy = z["x"] - orig[0], z["y"] - orig[1]
             if (dx or dy) and z.get("pin"):
