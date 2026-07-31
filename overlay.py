@@ -51,6 +51,7 @@ GRIP = 10
 EDGE = 6
 MIN_SIZE = 60
 SNAP = 8
+GAP = 80      # ~one desktop icon cell: minimum distance between zones
 PIN_MS = 2000
 HOVER_MS = 60
 
@@ -340,12 +341,46 @@ class ZoneOverlay(QWidget):
                 z["h"] += s[0]
                 self.guides.append(("h", s[1]))
 
+    # ---------- collision: zones never overlap, one icon-cell gap ----------
+    def _collides(self, z):
+        a = QRect(z["x"] - GAP, z["y"] - GAP, z["w"] + 2 * GAP, z["h"] + 2 * GAP)
+        for o in self.zones:
+            if o is z:
+                continue
+            if a.intersects(QRect(o["x"], o["y"], o["w"], o["h"])):
+                return True
+        return False
+
+    def _mark_valid(self, z):
+        self._valid = (z["x"], z["y"], z["w"], z["h"])
+
+    def _keep_valid(self, z):
+        """If the dragged geometry collides, fall back to the last valid one
+        (sliding along one axis when possible) — the zone and its icons wait
+        until the place is actually free."""
+        if not self._collides(z):
+            self._mark_valid(z)
+            return
+        vx_, vy_, vw_, vh_ = self._valid
+        if self.mode == "move":
+            cx, cy = z["x"], z["y"]
+            z["x"], z["y"] = cx, vy_  # slide horizontally only
+            if not self._collides(z):
+                self._mark_valid(z)
+                return
+            z["x"], z["y"] = vx_, cy  # slide vertically only
+            if not self._collides(z):
+                self._mark_valid(z)
+                return
+        z["x"], z["y"], z["w"], z["h"] = vx_, vy_, vw_, vh_
+
     # ---------- mouse ----------
     def _start_resize(self, zone, edges):
         self.mode = "resize"
         self.target = zone
         self.resize_edges = edges
         self.orig = (zone["x"], zone["y"], zone["w"], zone["h"])
+        self._mark_valid(zone)
 
     def mousePressEvent(self, e):
         x, y = int(e.position().x()), int(e.position().y())
@@ -375,6 +410,7 @@ class ZoneOverlay(QWidget):
                 if zone.get("resizable", True) or self._drag_mode():
                     self.mode, self.target = "move", zone
                     self.orig = (zone["x"], zone["y"])
+                    self._mark_valid(zone)
                     self._begin_icon_drag(zone)
                 else:
                     self.busy = False
@@ -388,6 +424,7 @@ class ZoneOverlay(QWidget):
         elif z and (z.get("resizable", True) or self._drag_mode()):
             self.mode, self.target = "move", z
             self.orig = (z["x"], z["y"])
+            self._mark_valid(z)
             self._begin_icon_drag(z)
         elif z:
             pass  # locked-in-place zone
@@ -396,6 +433,7 @@ class ZoneOverlay(QWidget):
             self.target = {"name": "", "x": x + self.vx, "y": y + self.vy,
                            "w": 0, "h": 0, "color": config.next_zone_color(self.zones)}
             self.zones.append(self.target)
+            self._mark_valid(self.target)
 
     def _hit_unlocked(self, x, y):
         for z in reversed(self.zones):
@@ -415,6 +453,7 @@ class ZoneOverlay(QWidget):
         if self.mode == "move":
             z["x"], z["y"] = self.orig[0] + dx, self.orig[1] + dy
             self._apply_snap(z)
+            self._keep_valid(z)
             self.update()
             # live-carry the zone's icons, throttled to keep explorer smooth
             f = self.hooks.get("drag_update")
@@ -440,6 +479,7 @@ class ZoneOverlay(QWidget):
             z["y"] = min(self.start[1], y) + self.vy
             z["w"], z["h"] = abs(dx), abs(dy)
         self._apply_snap(z)
+        self._keep_valid(z)
         self.update()
 
     def mouseReleaseEvent(self, e):
