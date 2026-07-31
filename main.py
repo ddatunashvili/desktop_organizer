@@ -31,7 +31,7 @@ from desktop_icons import DesktopIcons
 from overlay import ZoneOverlay, virtual_screen
 
 POLL_MS = 3000           # display-change poll interval
-ENFORCE_MS = 4000        # pinned-zone icon enforcement interval
+ENFORCE_MS = 2000        # pinned-zone icon enforcement interval
 RESTORE_DELAY_MS = 2500  # let Windows finish rearranging before we fix icons
 ICON_ANCHOR = 40         # px offset from icon top-left used for "inside zone" test
 
@@ -398,9 +398,15 @@ class App:
                     if [sx, sy] != pos:  # rearranged inside its zone -> remember
                         kept[key] = [sx, sy]
                         cfg_dirty = zone_dirty = True
-                elif [sx, sy] != pos:  # escaped the zone -> put it back
-                    di.set_position_screen(idx, pos[0], pos[1])
-                    moved_any = True
+                elif [sx, sy] != pos:
+                    if zone.get("auto_fit"):
+                        # auto-fit zones follow their icons instead of
+                        # dragging them back — the border re-fits around them
+                        kept[key] = [sx, sy]
+                        cfg_dirty = zone_dirty = True
+                    else:  # escaped the zone -> put it back
+                        di.set_position_screen(idx, pos[0], pos[1])
+                        moved_any = True
             for key, (idx, sx, sy) in items.items():
                 if key not in owned and zone_contains(zone, sx, sy):
                     kept[key] = [sx, sy]
