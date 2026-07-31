@@ -200,6 +200,7 @@ class App:
             "drag_mode": lambda: self.cfg.get("drag_mode", False),
             "drag_start": self.zone_drag_start,
             "drag_update": self.zone_dragging,
+            "area_free": self.area_free,
         }, ui_scale=self.ui_scale)
 
     def show_panel(self):
@@ -278,6 +279,21 @@ class App:
                   for k in z.get("icons", {})}
         return {key: [sx, sy] for key, _i, sx, sy in items
                 if zone_contains(zone, sx, sy) and key not in others}
+
+    def area_free(self, zone):
+        """True when no foreign icons sit inside the zone's current rect —
+        the zone's own carried/kept icons don't count."""
+        try:
+            items = self.icons().keyed_icons()
+        except RuntimeError:
+            return True
+        own = set(self._drag_icons or {})
+        if zone.get("pin"):
+            own |= set(zone.get("icons", {}))
+        for key, _i, sx, sy in items:
+            if key not in own and zone_contains(zone, sx, sy):
+                return False
+        return True
 
     def zone_drag_start(self, zone):
         """Capture base positions of every icon that must travel with the

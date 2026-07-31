@@ -181,6 +181,8 @@ class ZoneOverlay(QWidget):
         """Display rect: if kept icons overflow the zone, the border stretches
         outward to hug them — the zone's stored size never changes."""
         r = self._z_rect(z)
+        if z is self.target and self.mode == "move":
+            return r  # while dragging, the outline keeps its true size
         if not (self.locked and z.get("pin") and z.get("icons")):
             return r
         ICON_W, ICON_H, PAD = 80, 92, 8
@@ -252,9 +254,15 @@ class ZoneOverlay(QWidget):
 
     def _begin_icon_drag(self, zone):
         self._last_icon_emit = 0.0
+        self.place_ok = True
+        self._icon_ok = True
         f = self.hooks.get("drag_start")
         if f:
             f(zone)
+
+    def _area_free(self, z):
+        f = self.hooks.get("area_free")
+        return f(z) if f else True
 
     def _zone_under(self, x, y):
         # the visible label/gear of the hovered zone counts as "inside" —
@@ -451,16 +459,22 @@ class ZoneOverlay(QWidget):
         dx, dy = x - self.start[0], y - self.start[1]
         z = self.target
         if self.mode == "move":
+            # outline moves freely — icons only settle on genuinely free spots
             z["x"], z["y"] = self.orig[0] + dx, self.orig[1] + dy
             self._apply_snap(z)
-            self._keep_valid(z)
-            self.update()
-            # live-carry the zone's icons, throttled to keep explorer smooth
-            f = self.hooks.get("drag_update")
             now = time.monotonic()
-            if f and now - getattr(self, "_last_icon_emit", 0.0) > 0.045:
+            throttled = now - getattr(self, "_last_icon_emit", 0.0) > 0.045
+            if throttled:
                 self._last_icon_emit = now
-                f(z, z["x"] - self.orig[0], z["y"] - self.orig[1])
+                self._icon_ok = self._area_free(z)  # foreign-icon check (costly)
+            self.place_ok = (not self._collides(z)) and self._icon_ok
+            if self.place_ok:
+                self._mark_valid(z)
+                if throttled:
+                    f = self.hooks.get("drag_update")
+                    if f:
+                        f(z, z["x"] - self.orig[0], z["y"] - self.orig[1])
+            self.update()
             return
         elif self.mode == "resize":
             ox, oy, ow, oh = self.orig
@@ -504,9 +518,13 @@ class ZoneOverlay(QWidget):
                 z["pin"] = True
                 z["icons"] = self.hooks["capture_icons"](z)
         elif mode == "move" and orig:
+            if self._collides(z) or not self._area_free(z):
+                # dropped on an occupied spot: back to the last free position
+                z["x"], z["y"] = self._valid[0], self._valid[1]
+            self.place_ok = True
             dx, dy = z["x"] - orig[0], z["y"] - orig[1]
-            if dx or dy:  # main decides what travels (pinned / dragging mode)
-                self.hooks["zone_moved"](z, dx, dy)
+            # always finalize: icons return to exact base + delta positions
+            self.hooks["zone_moved"](z, dx, dy)
         self.update()
         self.hooks["changed"]()
 
@@ -803,7 +821,11 @@ class ZoneOverlay(QWidget):
                     fill.setAlpha(alpha)
                     p.fillPath(path, fill)
 
-            pen = QPen(color, 2)
+            if (z is self.target and self.mode == "move"
+                    and not getattr(self, "place_ok", True)):
+                pen = QPen(GUIDE_COLOR, 2, Qt.DashLine)  # spot not free
+            else:
+                pen = QPen(color, 2)
             p.setPen(pen)
             p.setBrush(Qt.NoBrush)
             p.drawPath(path)
