@@ -385,8 +385,10 @@ class App:
         owned = {k for z in pinned for k in z.get("icons", {})}
         cfg_dirty = False
         moved_any = False
+        refit = []  # auto-fit zones whose icon set/layout changed this tick
         for zone in pinned:
             kept = zone.setdefault("icons", {})
+            zone_dirty = False
             for key, pos in list(kept.items()):
                 cur = items.get(key)
                 if cur is None:
@@ -395,7 +397,7 @@ class App:
                 if zone_contains(zone, sx, sy):
                     if [sx, sy] != pos:  # rearranged inside its zone -> remember
                         kept[key] = [sx, sy]
-                        cfg_dirty = True
+                        cfg_dirty = zone_dirty = True
                 elif [sx, sy] != pos:  # escaped the zone -> put it back
                     di.set_position_screen(idx, pos[0], pos[1])
                     moved_any = True
@@ -403,7 +405,11 @@ class App:
                 if key not in owned and zone_contains(zone, sx, sy):
                     kept[key] = [sx, sy]
                     owned.add(key)
-                    cfg_dirty = True
+                    cfg_dirty = zone_dirty = True
+            if zone_dirty and zone.get("auto_fit"):
+                refit.append(zone)
+        for zone in refit:
+            self.fit_zone(zone)
         if moved_any:
             di.redraw()
         if cfg_dirty:

@@ -598,6 +598,13 @@ class ZoneOverlay(QWidget):
             self.update()
             self.hooks["changed"]()
 
+    def _toggle_auto_fit(self, zone):
+        zone["auto_fit"] = not zone.get("auto_fit")
+        if zone["auto_fit"]:
+            self._fit_zone(zone)  # fit right away, then keep fitting
+        else:
+            self.hooks["changed"]()
+
     def _toggle_pin(self, zone):
         if zone.get("pin"):
             zone["pin"] = False
@@ -645,6 +652,10 @@ class ZoneOverlay(QWidget):
         m.addAction("Set icon (emoji)...", lambda: self._set_icon(zone))
         m.addAction("Fit zone to icons (equal padding)",
                     lambda: self._fit_zone(zone))
+        a = m.addAction("Auto-fit: re-fit whenever icons change",
+                        lambda: self._toggle_auto_fit(zone))
+        a.setCheckable(True)
+        a.setChecked(bool(zone.get("auto_fit")))
 
         shapes = m.addMenu("Shape")
         for key, label in (("rect", "Rectangle"), ("round", "Rounded rectangle"),
