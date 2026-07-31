@@ -139,6 +139,7 @@ class App:
         self.cfg = config.load()
         self.last_key = resolution_key()
         self._di = None
+        self._drag_icons = {}  # base positions captured at zone-drag start
 
         self.ui_scale = max(1.0, ctypes.windll.user32.GetDpiForSystem() / 96.0)
 
@@ -197,6 +198,8 @@ class App:
             "custom_colors": self.cfg.setdefault("custom_colors", []),
             "font_family": self.font_family,
             "drag_mode": lambda: self.cfg.get("drag_mode", False),
+            "drag_start": self.zone_drag_start,
+            "drag_update": self.zone_dragging,
         }, ui_scale=self.ui_scale)
 
     def show_panel(self):
@@ -276,40 +279,57 @@ class App:
         return {key: [sx, sy] for key, _i, sx, sy in items
                 if zone_contains(zone, sx, sy) and key not in others}
 
-    def zone_moved(self, zone, dx, dy):
-        """Zone dragged: pinned zones carry their kept icons; in dragging
-        mode every icon that sat inside the zone travels with it too."""
+    def zone_drag_start(self, zone):
+        """Capture base positions of every icon that must travel with the
+        zone. All later moves are base + total delta, so relative positions
+        inside the zone stay pixel-exact with zero drift."""
+        self._drag_icons = {}
         pinned = bool(zone.get("pin"))
         drag = self.cfg.get("drag_mode", False)
         if not (pinned or drag):
             return
         try:
-            di = self.icons()
-            positions = {key: (i, sx, sy) for key, i, sx, sy in di.keyed_icons()}
+            items = self.icons().keyed_icons()
         except RuntimeError:
             return
-        targets = {}
-        if pinned:
+        kept = zone.get("icons", {}) if pinned else {}
+        for key, i, sx, sy in items:
+            if key in kept or (drag and zone_contains(zone, sx, sy)):
+                self._drag_icons[key] = (i, sx, sy)
+
+    def zone_dragging(self, zone, dx, dy):
+        """Live-follow while the zone is being dragged (throttled by overlay)."""
+        if not self._drag_icons:
+            return
+        try:
+            di = self.icons()
+        except RuntimeError:
+            return
+        for _key, (i, sx, sy) in self._drag_icons.items():
+            di.set_position_screen(i, sx + dx, sy + dy)
+
+    def zone_moved(self, zone, dx, dy):
+        """Final placement on release: exact base + delta, then remember."""
+        base = self._drag_icons or {}
+        self._drag_icons = {}
+        if not base:
+            return
+        try:
+            di = self.icons()
+        except RuntimeError:
+            return
+        for _key, (i, sx, sy) in base.items():
+            di.set_position_screen(i, sx + dx, sy + dy)
+        di.redraw()
+        if zone.get("pin"):
             kept = zone.setdefault("icons", {})
+            for key, (_i, sx, sy) in base.items():
+                kept[key] = [sx + dx, sy + dy]
+            # kept icons that are currently missing from the desktop still
+            # shift with the zone so they land right if they come back
             for k, p in list(kept.items()):
-                kept[k] = [p[0] + dx, p[1] + dy]
-                targets[k] = kept[k]
-        if drag:
-            old = {"x": zone["x"] - dx, "y": zone["y"] - dy,
-                   "w": zone["w"], "h": zone["h"]}
-            for key, (_i, sx, sy) in positions.items():
-                if key not in targets and zone_contains(old, sx, sy):
-                    targets[key] = [sx + dx, sy + dy]
-                    if pinned:
-                        zone["icons"][key] = targets[key]
-        moved = False
-        for key, pos in targets.items():
-            cur = positions.get(key)
-            if cur:
-                di.set_position_screen(cur[0], pos[0], pos[1])
-                moved = True
-        if moved:
-            di.redraw()
+                if k not in base:
+                    kept[k] = [p[0] + dx, p[1] + dy]
 
     # ---- per-zone icon enforcement ----
     def enforce_loop(self):

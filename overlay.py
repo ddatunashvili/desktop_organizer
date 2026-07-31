@@ -14,6 +14,7 @@ Draw mode (unlock) dims the screen for drawing brand-new zones.
 """
 
 import ctypes
+import time
 from ctypes import wintypes
 
 from PySide6.QtCore import QPoint, QRect, QRectF, Qt, QTimer
@@ -232,6 +233,12 @@ class ZoneOverlay(QWidget):
         f = self.hooks.get("drag_mode")
         return bool(f and f())
 
+    def _begin_icon_drag(self, zone):
+        self._last_icon_emit = 0.0
+        f = self.hooks.get("drag_start")
+        if f:
+            f(zone)
+
     def _zone_under(self, x, y):
         # the visible label/gear of the hovered zone counts as "inside" —
         # otherwise moving onto the tag (drawn above the zone) hides it
@@ -352,6 +359,7 @@ class ZoneOverlay(QWidget):
                 if zone.get("resizable", True) or self._drag_mode():
                     self.mode, self.target = "move", zone
                     self.orig = (zone["x"], zone["y"])
+                    self._begin_icon_drag(zone)
                 else:
                     self.busy = False
             elif kind == "edge":
@@ -364,6 +372,7 @@ class ZoneOverlay(QWidget):
         elif z and (z.get("resizable", True) or self._drag_mode()):
             self.mode, self.target = "move", z
             self.orig = (z["x"], z["y"])
+            self._begin_icon_drag(z)
         elif z:
             pass  # locked-in-place zone
         else:
@@ -389,6 +398,15 @@ class ZoneOverlay(QWidget):
         z = self.target
         if self.mode == "move":
             z["x"], z["y"] = self.orig[0] + dx, self.orig[1] + dy
+            self._apply_snap(z)
+            self.update()
+            # live-carry the zone's icons, throttled to keep explorer smooth
+            f = self.hooks.get("drag_update")
+            now = time.monotonic()
+            if f and now - getattr(self, "_last_icon_emit", 0.0) > 0.045:
+                self._last_icon_emit = now
+                f(z, z["x"] - self.orig[0], z["y"] - self.orig[1])
+            return
         elif self.mode == "resize":
             ox, oy, ow, oh = self.orig
             if "l" in self.resize_edges:
