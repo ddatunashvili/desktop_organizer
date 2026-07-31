@@ -541,6 +541,9 @@ class ZoneOverlay(QWidget):
             a = shapes.addAction(label, lambda k=key: self._set_shape(zone, k))
             a.setCheckable(True)
             a.setChecked(shape == key)
+        shapes.addSeparator()
+        shapes.addAction(f"Border radius... ({zone.get('radius', 10)} px)",
+                         lambda: self._set_radius(zone))
 
         colors = m.addMenu("Color")
         for col in config.ZONE_COLORS:
@@ -584,6 +587,18 @@ class ZoneOverlay(QWidget):
         self.update()
         self.hooks["changed"]()
 
+    def _set_radius(self, zone):
+        self.busy = True
+        rad, ok = QInputDialog.getInt(None, "Border radius",
+                                      "Corner radius in pixels (0 = sharp):",
+                                      zone.get("radius", 10), 0, 100)
+        self.busy = False
+        if ok:
+            zone["radius"] = rad
+            zone["shape"] = "round"  # radius implies rounded rectangle
+            self.update()
+            self.hooks["changed"]()
+
     def _set_title_color(self, zone, col):
         zone["title_color"] = col
         self.update()
@@ -597,7 +612,7 @@ class ZoneOverlay(QWidget):
         if shape == "ellipse":
             path.addEllipse(rf)
         elif shape == "round":
-            rad = min(18, r.width() // 4, r.height() // 4)
+            rad = min(z.get("radius", 10), r.width() // 2, r.height() // 2)
             path.addRoundedRect(rf, rad, rad)
         else:
             path.addRect(rf)
