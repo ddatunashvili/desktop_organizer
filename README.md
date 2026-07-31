@@ -4,13 +4,19 @@ Draw labeled zones (bordered areas) directly on your Windows desktop wallpaper �
 behind the icons — and keep your icon arrangement fixed even when the screen
 resolution or monitor setup changes.
 
-No dependencies: plain Python 3 (ctypes + tkinter).
+Built with Python 3 + PySide6 (Qt): antialiased zones, per-pixel transparency,
+translucent hover fills, system tray icon.
 
 ## Run
 
-Double-click `DesktopGrid.bat` (or run `pythonw main.py`).
+```
+pip install -r requirements.txt
+```
 
-A small control window opens and the zone overlay appears behind your desktop icons.
+Then double-click `DesktopGrid.bat` (or run `pythonw main.py`).
+
+A control window opens and Desktop Grid sits in the system tray — closing the
+window keeps it running; quit from the tray menu.
 
 ## Use
 
