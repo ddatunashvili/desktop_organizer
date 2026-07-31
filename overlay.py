@@ -19,7 +19,9 @@ from ctypes import wintypes
 from PySide6.QtCore import QPoint, QRect, QRectF, Qt, QTimer
 from PySide6.QtGui import (QBrush, QColor, QCursor, QFont, QFontMetrics,
                            QPainter, QPainterPath, QPen, QPixmap)
-from PySide6.QtWidgets import QColorDialog, QInputDialog, QMenu, QWidget
+from PySide6.QtWidgets import (QColorDialog, QDialog, QHBoxLayout,
+                               QInputDialog, QMenu, QPushButton, QSlider,
+                               QSpinBox, QVBoxLayout, QWidget)
 
 import config
 
@@ -591,16 +593,61 @@ class ZoneOverlay(QWidget):
         self.hooks["changed"]()
 
     def _set_radius(self, zone):
-        self.busy = True
-        rad, ok = QInputDialog.getInt(None, "Border radius",
-                                      "Corner radius in pixels (0 = sharp):",
-                                      zone.get("radius", 10), 0, 100)
-        self.busy = False
-        if ok:
-            zone["radius"] = rad
+        """Radius dialog with live preview — the zone re-renders while the
+        slider/spinbox value changes."""
+        orig_rad = zone.get("radius", 10)
+        orig_shape = zone.get("shape", "rect")
+
+        dlg = QDialog()
+        dlg.setWindowTitle("Border radius")
+        dlg.setWindowFlag(Qt.WindowStaysOnTopHint, True)
+        lay = QVBoxLayout(dlg)
+
+        row = QHBoxLayout()
+        slider = QSlider(Qt.Horizontal)
+        slider.setRange(0, 100)
+        slider.setValue(orig_rad)
+        spin = QSpinBox()
+        spin.setRange(0, 100)
+        spin.setValue(orig_rad)
+        spin.setSuffix(" px")
+        row.addWidget(slider, 1)
+        row.addWidget(spin)
+        lay.addLayout(row)
+
+        btns = QHBoxLayout()
+        ok_btn = QPushButton("OK")
+        cancel_btn = QPushButton("Cancel")
+        btns.addStretch(1)
+        btns.addWidget(ok_btn)
+        btns.addWidget(cancel_btn)
+        lay.addLayout(btns)
+
+        def preview(v):
+            slider.blockSignals(True)
+            spin.blockSignals(True)
+            slider.setValue(v)
+            spin.setValue(v)
+            slider.blockSignals(False)
+            spin.blockSignals(False)
+            zone["radius"] = v
             zone["shape"] = "round"  # radius implies rounded rectangle
             self.update()
+
+        slider.valueChanged.connect(preview)
+        spin.valueChanged.connect(preview)
+        ok_btn.clicked.connect(dlg.accept)
+        cancel_btn.clicked.connect(dlg.reject)
+
+        self.busy = True
+        accepted = dlg.exec() == QDialog.Accepted
+        self.busy = False
+        if accepted:
             self.hooks["changed"]()
+        else:  # revert the live preview
+            zone["radius"] = orig_rad
+            zone["shape"] = orig_shape
+            self.update()
 
     def _set_title_color(self, zone, col):
         zone["title_color"] = col
