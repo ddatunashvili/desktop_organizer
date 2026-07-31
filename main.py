@@ -7,6 +7,7 @@ Run with:  pythonw main.py   (or python main.py to see console errors)
 
 import ctypes
 import os
+import subprocess
 import sys
 
 # Real physical pixels everywhere: our zone/icon math is Win32 pixel based.
@@ -47,6 +48,12 @@ def zone_contains(zone, sx, sy):
             and zone["y"] <= py <= zone["y"] + zone["h"])
 
 
+def resource_path(name):
+    """Works both as a script and inside a PyInstaller bundle."""
+    base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base, name)
+
+
 def make_tray_icon():
     pm = QPixmap(64, 64)
     pm.fill(Qt.transparent)
@@ -60,12 +67,19 @@ def make_tray_icon():
     return QIcon(pm)
 
 
+def app_icon():
+    logo = resource_path("logo.png")
+    if os.path.exists(logo):
+        return QIcon(logo)
+    return make_tray_icon()
+
+
 class ControlPanel(QWidget):
     def __init__(self, app):
         super().__init__()
         self.app = app
         self.setWindowTitle("Desktop Grid")
-        self.setFixedSize(360, 300)
+        self.setFixedSize(360, 330)
         self.setWindowFlag(Qt.WindowStaysOnTopHint, True)
 
         lay = QVBoxLayout(self)
@@ -96,6 +110,11 @@ class ControlPanel(QWidget):
         self.auto_chk.setChecked(app.cfg.get("auto_restore", True))
         self.auto_chk.toggled.connect(app.toggle_auto)
         lay.addWidget(self.auto_chk)
+
+        self.autostart_chk = QCheckBox("Start with Windows")
+        self.autostart_chk.setChecked(app.is_autostart())
+        self.autostart_chk.toggled.connect(app.set_autostart)
+        lay.addWidget(self.autostart_chk)
 
         hint = QLabel("Closing this window keeps Desktop Grid running in the tray.")
         hint.setStyleSheet("color: #889; font-size: 11px;")
@@ -138,11 +157,14 @@ class App:
         except RuntimeError as e:
             QMessageBox.critical(None, "Desktop Grid", str(e))
 
+        icon = app_icon()
+        self.qapp.setWindowIcon(icon)
         self.panel = ControlPanel(self)
+        self.panel.setWindowIcon(icon)
         self.panel.show()
         self.overlay = self._make_overlay()
 
-        self.tray = QSystemTrayIcon(make_tray_icon())
+        self.tray = QSystemTrayIcon(icon)
         self.tray.setToolTip("Desktop Grid")
         tray_menu = QMenu()
         tray_menu.addAction("Open control panel", self.show_panel)
@@ -175,6 +197,42 @@ class App:
         self.panel.show()
         self.panel.raise_()
         self.panel.activateWindow()
+
+    # ---- autostart (Startup-folder shortcut) ----
+    @staticmethod
+    def startup_lnk():
+        return os.path.join(os.environ["APPDATA"],
+                            r"Microsoft\Windows\Start Menu\Programs\Startup",
+                            "DesktopGrid.lnk")
+
+    def is_autostart(self):
+        return os.path.exists(self.startup_lnk())
+
+    def set_autostart(self, enabled):
+        lnk = self.startup_lnk()
+        if not enabled:
+            try:
+                os.remove(lnk)
+            except OSError:
+                pass
+            return
+        if getattr(sys, "frozen", False):  # packaged exe
+            target, args = sys.executable, ""
+            workdir = os.path.dirname(sys.executable)
+        else:
+            target = os.path.join(os.path.dirname(sys.executable), "pythonw.exe")
+            if not os.path.exists(target):
+                target = sys.executable
+            script = os.path.abspath(__file__)
+            args = f'"{script}"'
+            workdir = os.path.dirname(script)
+        ps = (f"$ws = New-Object -ComObject WScript.Shell; "
+              f"$l = $ws.CreateShortcut('{lnk}'); "
+              f"$l.TargetPath = '{target}'; "
+              f"$l.Arguments = '{args}'; "
+              f"$l.WorkingDirectory = '{workdir}'; $l.Save()")
+        subprocess.run(["powershell", "-NoProfile", "-Command", ps],
+                       creationflags=subprocess.CREATE_NO_WINDOW)
 
     # ---- desktop icon access (cached, survives explorer restarts) ----
     def icons(self):

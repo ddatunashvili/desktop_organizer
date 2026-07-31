@@ -2,3 +2,7 @@ __pycache__/
 *.pyc
 err*.log
 out*.log
+qt_err.log
+build/
+dist/
+*.spec
