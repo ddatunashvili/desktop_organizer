@@ -14,7 +14,6 @@ Draw mode (unlock) dims the screen for drawing brand-new zones.
 """
 
 import ctypes
-import time
 from ctypes import wintypes
 
 from PySide6.QtCore import QPoint, QRect, QRectF, Qt, QTimer
@@ -51,7 +50,6 @@ GRIP = 10
 EDGE = 6
 MIN_SIZE = 60
 SNAP = 8
-GAP = 80      # ~one desktop icon cell: minimum distance between zones
 PIN_MS = 2000
 HOVER_MS = 60
 
@@ -177,27 +175,9 @@ class ZoneOverlay(QWidget):
     def _z_rect(self, z):
         return QRect(z["x"] - self.vx, z["y"] - self.vy, z["w"], z["h"])
 
-    def _effective_rect(self, z):
-        """Display rect: if kept icons overflow the zone, the border stretches
-        outward to hug them — the zone's stored size never changes."""
-        r = self._z_rect(z)
-        if z is self.target and self.mode == "move":
-            return r  # while dragging, the outline keeps its true size
-        if not (self.locked and z.get("pin") and z.get("icons")):
-            return r
-        ICON_W, ICON_H, PAD = 80, 92, 8
-        x1, y1, x2, y2 = r.left(), r.top(), r.right(), r.bottom()
-        for pos in z["icons"].values():
-            ix, iy = pos[0] - self.vx, pos[1] - self.vy
-            x1 = min(x1, ix - PAD)
-            y1 = min(y1, iy - PAD)
-            x2 = max(x2, ix + ICON_W + PAD)
-            y2 = max(y2, iy + ICON_H + PAD)
-        return QRect(x1, y1, x2 - x1, y2 - y1)
-
     def _label_geom(self, z):
         """(pill_rect, gear_rect, text) for a zone's title tag above the zone."""
-        r = self._effective_rect(z)
+        r = self._z_rect(z)
         name = z.get("name", "") or "Zone"
         icon = z.get("icon", "")
         pin_mark = " ●" if z.get("pin") else ""
@@ -215,7 +195,7 @@ class ZoneOverlay(QWidget):
 
     def _edge_at(self, z, x, y):
         """Resize edges under (x, y) for zone z, or ()."""
-        r = self._effective_rect(z)
+        r = self._z_rect(z)
         if not z.get("resizable", True):
             return ()
         if r.right() - HANDLE <= x <= r.right() + 4 and r.bottom() - HANDLE <= y <= r.bottom() + 4:
@@ -248,30 +228,6 @@ class ZoneOverlay(QWidget):
                 return z, "edge", edges
         return None, None, ()
 
-    def _drag_mode(self):
-        f = self.hooks.get("drag_mode")
-        return bool(f and f())
-
-    def _fit_before_drag(self, zone):
-        """Moving a zone auto-sizes it to its icons first (equal padding);
-        the fitted size is saved and is what gets dragged."""
-        if zone.get("pin") and zone.get("icons"):
-            f = self.hooks.get("fit_zone")
-            if f:
-                f(zone)
-
-    def _begin_icon_drag(self, zone):
-        self._last_icon_emit = 0.0
-        self.place_ok = True
-        self._icon_ok = True
-        f = self.hooks.get("drag_start")
-        if f:
-            f(zone)
-
-    def _area_free(self, z):
-        f = self.hooks.get("area_free")
-        return f(z) if f else True
-
     def _zone_under(self, x, y):
         # the visible label/gear of the hovered zone counts as "inside" —
         # otherwise moving onto the tag (drawn above the zone) hides it
@@ -281,7 +237,7 @@ class ZoneOverlay(QWidget):
             if hot.contains(x, y):
                 return self.hover_zone
         for z in reversed(self.zones):
-            r = self._effective_rect(z).adjusted(-EDGE, -EDGE, EDGE, EDGE)
+            r = self._z_rect(z).adjusted(-EDGE, -EDGE, EDGE, EDGE)
             if r.contains(x, y):
                 return z
         return None
@@ -357,46 +313,12 @@ class ZoneOverlay(QWidget):
                 z["h"] += s[0]
                 self.guides.append(("h", s[1]))
 
-    # ---------- collision: zones never overlap, one icon-cell gap ----------
-    def _collides(self, z):
-        a = QRect(z["x"] - GAP, z["y"] - GAP, z["w"] + 2 * GAP, z["h"] + 2 * GAP)
-        for o in self.zones:
-            if o is z:
-                continue
-            if a.intersects(QRect(o["x"], o["y"], o["w"], o["h"])):
-                return True
-        return False
-
-    def _mark_valid(self, z):
-        self._valid = (z["x"], z["y"], z["w"], z["h"])
-
-    def _keep_valid(self, z):
-        """If the dragged geometry collides, fall back to the last valid one
-        (sliding along one axis when possible) — the zone and its icons wait
-        until the place is actually free."""
-        if not self._collides(z):
-            self._mark_valid(z)
-            return
-        vx_, vy_, vw_, vh_ = self._valid
-        if self.mode == "move":
-            cx, cy = z["x"], z["y"]
-            z["x"], z["y"] = cx, vy_  # slide horizontally only
-            if not self._collides(z):
-                self._mark_valid(z)
-                return
-            z["x"], z["y"] = vx_, cy  # slide vertically only
-            if not self._collides(z):
-                self._mark_valid(z)
-                return
-        z["x"], z["y"], z["w"], z["h"] = vx_, vy_, vw_, vh_
-
     # ---------- mouse ----------
     def _start_resize(self, zone, edges):
         self.mode = "resize"
         self.target = zone
         self.resize_edges = edges
         self.orig = (zone["x"], zone["y"], zone["w"], zone["h"])
-        self._mark_valid(zone)
 
     def mousePressEvent(self, e):
         x, y = int(e.position().x()), int(e.position().y())
@@ -422,13 +344,9 @@ class ZoneOverlay(QWidget):
             if kind == "gear":
                 self._menu(zone)
             elif kind == "label":
-                # size-locked zones still move when dragging mode is on
-                if zone.get("resizable", True) or self._drag_mode():
-                    self._fit_before_drag(zone)
+                if zone.get("resizable", True):
                     self.mode, self.target = "move", zone
                     self.orig = (zone["x"], zone["y"])
-                    self._mark_valid(zone)
-                    self._begin_icon_drag(zone)
                 else:
                     self.busy = False
             elif kind == "edge":
@@ -438,12 +356,9 @@ class ZoneOverlay(QWidget):
         z, edges = self._hit_unlocked(x, y)
         if z and edges:
             self._start_resize(z, edges)
-        elif z and (z.get("resizable", True) or self._drag_mode()):
-            self._fit_before_drag(z)
+        elif z and z.get("resizable", True):
             self.mode, self.target = "move", z
             self.orig = (z["x"], z["y"])
-            self._mark_valid(z)
-            self._begin_icon_drag(z)
         elif z:
             pass  # locked-in-place zone
         else:
@@ -451,7 +366,6 @@ class ZoneOverlay(QWidget):
             self.target = {"name": "", "x": x + self.vx, "y": y + self.vy,
                            "w": 0, "h": 0, "color": config.next_zone_color(self.zones)}
             self.zones.append(self.target)
-            self._mark_valid(self.target)
 
     def _hit_unlocked(self, x, y):
         for z in reversed(self.zones):
@@ -469,23 +383,7 @@ class ZoneOverlay(QWidget):
         dx, dy = x - self.start[0], y - self.start[1]
         z = self.target
         if self.mode == "move":
-            # outline moves freely — icons only settle on genuinely free spots
             z["x"], z["y"] = self.orig[0] + dx, self.orig[1] + dy
-            self._apply_snap(z)
-            now = time.monotonic()
-            throttled = now - getattr(self, "_last_icon_emit", 0.0) > 0.045
-            if throttled:
-                self._last_icon_emit = now
-                self._icon_ok = self._area_free(z)  # foreign-icon check (costly)
-            self.place_ok = (not self._collides(z)) and self._icon_ok
-            if self.place_ok:
-                self._mark_valid(z)
-                if throttled:
-                    f = self.hooks.get("drag_update")
-                    if f:
-                        f(z, z["x"] - self.orig[0], z["y"] - self.orig[1])
-            self.update()
-            return
         elif self.mode == "resize":
             ox, oy, ow, oh = self.orig
             if "l" in self.resize_edges:
@@ -503,7 +401,6 @@ class ZoneOverlay(QWidget):
             z["y"] = min(self.start[1], y) + self.vy
             z["w"], z["h"] = abs(dx), abs(dy)
         self._apply_snap(z)
-        self._keep_valid(z)
         self.update()
 
     def mouseReleaseEvent(self, e):
@@ -528,13 +425,9 @@ class ZoneOverlay(QWidget):
                 z["pin"] = True
                 z["icons"] = self.hooks["capture_icons"](z)
         elif mode == "move" and orig:
-            if self._collides(z) or not self._area_free(z):
-                # dropped on an occupied spot: back to the last free position
-                z["x"], z["y"] = self._valid[0], self._valid[1]
-            self.place_ok = True
             dx, dy = z["x"] - orig[0], z["y"] - orig[1]
-            # always finalize: icons return to exact base + delta positions
-            self.hooks["zone_moved"](z, dx, dy)
+            if (dx or dy) and z.get("pin"):
+                self.hooks["zone_moved"](z, dx, dy)
         self.update()
         self.hooks["changed"]()
 
@@ -601,20 +494,6 @@ class ZoneOverlay(QWidget):
             del saved[16:]
             self.hooks["changed"]()
 
-    def _fit_zone(self, zone):
-        f = self.hooks.get("fit_zone")
-        if f:
-            f(zone)
-            self.update()
-            self.hooks["changed"]()
-
-    def _toggle_auto_fit(self, zone):
-        zone["auto_fit"] = not zone.get("auto_fit")
-        if zone["auto_fit"]:
-            self._fit_zone(zone)  # fit right away, then keep fitting
-        else:
-            self.hooks["changed"]()
-
     def _toggle_pin(self, zone):
         if zone.get("pin"):
             zone["pin"] = False
@@ -660,12 +539,6 @@ class ZoneOverlay(QWidget):
         m.addSeparator()
         m.addAction("Rename...", lambda: self._rename(zone))
         m.addAction("Set icon (emoji)...", lambda: self._set_icon(zone))
-        m.addAction("Fit zone to icons (equal padding)",
-                    lambda: self._fit_zone(zone))
-        a = m.addAction("Auto-fit: re-fit whenever icons change",
-                        lambda: self._toggle_auto_fit(zone))
-        a.setCheckable(True)
-        a.setChecked(bool(zone.get("auto_fit")))
 
         shapes = m.addMenu("Shape")
         for key, label in (("rect", "Rectangle"), ("round", "Rounded rectangle"),
@@ -835,7 +708,7 @@ class ZoneOverlay(QWidget):
                        "Right-click: delete   |   Esc: done")
 
         for z in self.zones:
-            r = self._effective_rect(z)
+            r = self._z_rect(z)
             color = QColor(z.get("color", "#4FC3F7"))
             path = self._shape_path(z, r)
             hovered = self.locked and z is self.hover_zone
@@ -851,11 +724,7 @@ class ZoneOverlay(QWidget):
                     fill.setAlpha(alpha)
                     p.fillPath(path, fill)
 
-            if (z is self.target and self.mode == "move"
-                    and not getattr(self, "place_ok", True)):
-                pen = QPen(GUIDE_COLOR, 2, Qt.DashLine)  # spot not free
-            else:
-                pen = QPen(color, 2)
+            pen = QPen(color, 2)
             p.setPen(pen)
             p.setBrush(Qt.NoBrush)
             p.drawPath(path)

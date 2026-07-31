@@ -31,7 +31,7 @@ from desktop_icons import DesktopIcons
 from overlay import ZoneOverlay, virtual_screen
 
 POLL_MS = 3000           # display-change poll interval
-ENFORCE_MS = 2000        # pinned-zone icon enforcement interval
+ENFORCE_MS = 4000        # pinned-zone icon enforcement interval
 RESTORE_DELAY_MS = 2500  # let Windows finish rearranging before we fix icons
 ICON_ANCHOR = 40         # px offset from icon top-left used for "inside zone" test
 
@@ -79,7 +79,7 @@ class ControlPanel(QWidget):
         super().__init__()
         self.app = app
         self.setWindowTitle("Desktop Grid")
-        self.setFixedSize(360, 360)
+        self.setFixedSize(360, 330)
         self.setWindowFlag(Qt.WindowStaysOnTopHint, True)
 
         lay = QVBoxLayout(self)
@@ -116,11 +116,6 @@ class ControlPanel(QWidget):
         self.autostart_chk.toggled.connect(app.set_autostart)
         lay.addWidget(self.autostart_chk)
 
-        self.drag_chk = QCheckBox("Dragging mode: moving a zone moves its icons")
-        self.drag_chk.setChecked(app.cfg.get("drag_mode", False))
-        self.drag_chk.toggled.connect(app.toggle_drag_mode)
-        lay.addWidget(self.drag_chk)
-
         hint = QLabel("Closing this window keeps Desktop Grid running in the tray.")
         hint.setStyleSheet("color: #889; font-size: 11px;")
         hint.setWordWrap(True)
@@ -139,8 +134,6 @@ class App:
         self.cfg = config.load()
         self.last_key = resolution_key()
         self._di = None
-        self._drag_icons = {}  # base positions captured at zone-drag start
-        self._miss = {}        # (zone id, icon key) -> consecutive missing ticks
 
         self.ui_scale = max(1.0, ctypes.windll.user32.GetDpiForSystem() / 96.0)
 
@@ -198,11 +191,6 @@ class App:
             "zone_moved": self.zone_moved,
             "custom_colors": self.cfg.setdefault("custom_colors", []),
             "font_family": self.font_family,
-            "drag_mode": lambda: self.cfg.get("drag_mode", False),
-            "drag_start": self.zone_drag_start,
-            "drag_update": self.zone_dragging,
-            "area_free": self.area_free,
-            "fit_zone": self.fit_zone,
         }, ui_scale=self.ui_scale)
 
     def show_panel(self):
@@ -282,94 +270,21 @@ class App:
         return {key: [sx, sy] for key, _i, sx, sy in items
                 if zone_contains(zone, sx, sy) and key not in others}
 
-    def fit_zone(self, zone):
-        """Resize the zone to its icons' bounding box with EQUAL padding on
-        all four sides (based on the outermost icons)."""
-        PAD, ICON_W, ICON_H = 14, 80, 92  # match the overlay's hug metrics
-        try:
-            items = self.icons().keyed_icons()
-        except RuntimeError:
-            return
-        kept = set(zone.get("icons", {})) if zone.get("pin") else set()
-        pts = [(sx, sy) for key, _i, sx, sy in items
-               if (key in kept if kept else zone_contains(zone, sx, sy))]
-        if not pts:
-            return
-        x1 = min(p[0] for p in pts) - PAD
-        y1 = min(p[1] for p in pts) - PAD
-        x2 = max(p[0] for p in pts) + ICON_W + PAD
-        y2 = max(p[1] for p in pts) + ICON_H + PAD
-        zone["x"], zone["y"] = x1, y1
-        zone["w"], zone["h"] = max(60, x2 - x1), max(60, y2 - y1)
-        config.save(self.cfg)
-        self.overlay.update()
-
-    def area_free(self, zone):
-        """True when no foreign icons sit inside the zone's current rect —
-        the zone's own carried/kept icons don't count."""
-        try:
-            items = self.icons().keyed_icons()
-        except RuntimeError:
-            return True
-        own = set(self._drag_icons or {})
-        if zone.get("pin"):
-            own |= set(zone.get("icons", {}))
-        for key, _i, sx, sy in items:
-            if key not in own and zone_contains(zone, sx, sy):
-                return False
-        return True
-
-    def zone_drag_start(self, zone):
-        """Capture base positions of every icon that must travel with the
-        zone. All later moves are base + total delta, so relative positions
-        inside the zone stay pixel-exact with zero drift."""
-        self._drag_icons = {}
-        pinned = bool(zone.get("pin"))
-        drag = self.cfg.get("drag_mode", False)
-        if not (pinned or drag):
-            return
-        try:
-            items = self.icons().keyed_icons()
-        except RuntimeError:
-            return
-        kept = zone.get("icons", {}) if pinned else {}
-        for key, i, sx, sy in items:
-            if key in kept or (drag and zone_contains(zone, sx, sy)):
-                self._drag_icons[key] = (i, sx, sy)
-
-    def zone_dragging(self, zone, dx, dy):
-        """Live-follow while the zone is being dragged (throttled by overlay)."""
-        if not self._drag_icons:
-            return
-        try:
-            di = self.icons()
-        except RuntimeError:
-            return
-        for _key, (i, sx, sy) in self._drag_icons.items():
-            di.set_position_screen(i, sx + dx, sy + dy)
-
     def zone_moved(self, zone, dx, dy):
-        """Final placement on release: exact base + delta, then remember."""
-        base = self._drag_icons or {}
-        self._drag_icons = {}
-        if not base:
+        kept = zone.get("icons", {})
+        if not kept:
             return
+        for k in kept:
+            kept[k] = [kept[k][0] + dx, kept[k][1] + dy]
         try:
             di = self.icons()
+            positions = {key: (i, sx, sy) for key, i, sx, sy in di.keyed_icons()}
+            for key, pos in kept.items():
+                if key in positions:
+                    di.set_position_screen(positions[key][0], pos[0], pos[1])
+            di.redraw()
         except RuntimeError:
-            return
-        for _key, (i, sx, sy) in base.items():
-            di.set_position_screen(i, sx + dx, sy + dy)
-        di.redraw()
-        if zone.get("pin"):
-            kept = zone.setdefault("icons", {})
-            for key, (_i, sx, sy) in base.items():
-                kept[key] = [sx + dx, sy + dy]
-            # kept icons that are currently missing from the desktop still
-            # shift with the zone so they land right if they come back
-            for k, p in list(kept.items()):
-                if k not in base:
-                    kept[k] = [p[0] + dx, p[1] + dy]
+            pass
 
     # ---- per-zone icon enforcement ----
     def enforce_loop(self):
@@ -386,52 +301,29 @@ class App:
         owned = {k for z in pinned for k in z.get("icons", {})}
         cfg_dirty = False
         moved_any = False
-        refit = []  # auto-fit zones whose icon set/layout changed this tick
         for zone in pinned:
             kept = zone.setdefault("icons", {})
-            zone_dirty = False
             for key, pos in list(kept.items()):
                 cur = items.get(key)
-                mk = (id(zone), key)
                 if cur is None:
-                    # icon gone (deleted/renamed): tolerate briefly, then
-                    # forget it so its old spot stops stretching the border
-                    self._miss[mk] = self._miss.get(mk, 0) + 1
-                    if self._miss[mk] >= 5:  # ~10 s absent
-                        del kept[key]
-                        self._miss.pop(mk, None)
-                        cfg_dirty = zone_dirty = True
-                    continue
-                self._miss.pop(mk, None)
+                    continue  # icon gone (deleted/renamed); keep the slot
                 idx, sx, sy = cur
                 if zone_contains(zone, sx, sy):
                     if [sx, sy] != pos:  # rearranged inside its zone -> remember
                         kept[key] = [sx, sy]
-                        cfg_dirty = zone_dirty = True
-                elif [sx, sy] != pos:
-                    if zone.get("auto_fit"):
-                        # auto-fit zones follow their icons instead of
-                        # dragging them back — the border re-fits around them
-                        kept[key] = [sx, sy]
-                        cfg_dirty = zone_dirty = True
-                    else:  # escaped the zone -> put it back
-                        di.set_position_screen(idx, pos[0], pos[1])
-                        moved_any = True
+                        cfg_dirty = True
+                elif [sx, sy] != pos:  # escaped the zone -> put it back
+                    di.set_position_screen(idx, pos[0], pos[1])
+                    moved_any = True
             for key, (idx, sx, sy) in items.items():
                 if key not in owned and zone_contains(zone, sx, sy):
                     kept[key] = [sx, sy]
                     owned.add(key)
-                    cfg_dirty = zone_dirty = True
-            if zone_dirty and zone.get("auto_fit"):
-                refit.append(zone)
-        for zone in refit:
-            self.fit_zone(zone)
+                    cfg_dirty = True
         if moved_any:
             di.redraw()
         if cfg_dirty:
             config.save(self.cfg)
-        if moved_any or cfg_dirty:
-            self.overlay.update()  # border may need to re-hug the icons
 
     # ---- actions ----
     def toggle_edit(self):
@@ -476,10 +368,6 @@ class App:
 
     def toggle_auto(self, checked):
         self.cfg["auto_restore"] = bool(checked)
-        config.save(self.cfg)
-
-    def toggle_drag_mode(self, checked):
-        self.cfg["drag_mode"] = bool(checked)
         config.save(self.cfg)
 
     # ---- display change watcher ----
