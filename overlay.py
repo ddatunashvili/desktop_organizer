@@ -176,9 +176,25 @@ class ZoneOverlay(QWidget):
     def _z_rect(self, z):
         return QRect(z["x"] - self.vx, z["y"] - self.vy, z["w"], z["h"])
 
+    def _effective_rect(self, z):
+        """Display rect: if kept icons overflow the zone, the border stretches
+        outward to hug them — the zone's stored size never changes."""
+        r = self._z_rect(z)
+        if not (self.locked and z.get("pin") and z.get("icons")):
+            return r
+        ICON_W, ICON_H, PAD = 80, 92, 8
+        x1, y1, x2, y2 = r.left(), r.top(), r.right(), r.bottom()
+        for pos in z["icons"].values():
+            ix, iy = pos[0] - self.vx, pos[1] - self.vy
+            x1 = min(x1, ix - PAD)
+            y1 = min(y1, iy - PAD)
+            x2 = max(x2, ix + ICON_W + PAD)
+            y2 = max(y2, iy + ICON_H + PAD)
+        return QRect(x1, y1, x2 - x1, y2 - y1)
+
     def _label_geom(self, z):
         """(pill_rect, gear_rect, text) for a zone's title tag above the zone."""
-        r = self._z_rect(z)
+        r = self._effective_rect(z)
         name = z.get("name", "") or "Zone"
         icon = z.get("icon", "")
         pin_mark = " ●" if z.get("pin") else ""
@@ -196,7 +212,7 @@ class ZoneOverlay(QWidget):
 
     def _edge_at(self, z, x, y):
         """Resize edges under (x, y) for zone z, or ()."""
-        r = self._z_rect(z)
+        r = self._effective_rect(z)
         if not z.get("resizable", True):
             return ()
         if r.right() - HANDLE <= x <= r.right() + 4 and r.bottom() - HANDLE <= y <= r.bottom() + 4:
@@ -248,7 +264,7 @@ class ZoneOverlay(QWidget):
             if hot.contains(x, y):
                 return self.hover_zone
         for z in reversed(self.zones):
-            r = self._z_rect(z).adjusted(-EDGE, -EDGE, EDGE, EDGE)
+            r = self._effective_rect(z).adjusted(-EDGE, -EDGE, EDGE, EDGE)
             if r.contains(x, y):
                 return z
         return None
@@ -731,7 +747,7 @@ class ZoneOverlay(QWidget):
                        "Right-click: delete   |   Esc: done")
 
         for z in self.zones:
-            r = self._z_rect(z)
+            r = self._effective_rect(z)
             color = QColor(z.get("color", "#4FC3F7"))
             path = self._shape_path(z, r)
             hovered = self.locked and z is self.hover_zone

@@ -369,6 +369,8 @@ class App:
             di.redraw()
         if cfg_dirty:
             config.save(self.cfg)
+        if moved_any or cfg_dirty:
+            self.overlay.update()  # border may need to re-hug the icons
 
     # ---- actions ----
     def toggle_edit(self):
