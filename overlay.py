@@ -16,12 +16,12 @@ Draw mode (unlock) dims the screen for drawing brand-new zones.
 import ctypes
 from ctypes import wintypes
 
-from PySide6.QtCore import QPoint, QRect, QRectF, Qt, QTimer
+from PySide6.QtCore import QEvent, QPoint, QRect, QRectF, Qt, QTimer
 from PySide6.QtGui import (QBrush, QColor, QCursor, QFont, QFontMetrics,
                            QPainter, QPainterPath, QPen, QPixmap)
 from PySide6.QtWidgets import (QColorDialog, QDialog, QHBoxLayout,
-                               QInputDialog, QMenu, QPushButton, QSlider,
-                               QSpinBox, QVBoxLayout, QWidget)
+                               QInputDialog, QLineEdit, QMenu, QPushButton,
+                               QSlider, QSpinBox, QVBoxLayout, QWidget)
 
 import config
 
@@ -101,6 +101,8 @@ class ZoneOverlay(QWidget):
         self.resize_edges = ()
         self.guides = []
         self.hover_zone = None
+        self._editor = None      # inline title QLineEdit
+        self._edit_zone = None
 
         self._click_through = None  # tracked WS_EX_TRANSPARENT state
 
@@ -419,8 +421,7 @@ class ZoneOverlay(QWidget):
             if z["w"] < MIN_SIZE or z["h"] < MIN_SIZE:
                 self.zones.remove(z)
             else:
-                name, ok = QInputDialog.getText(None, "Zone label", "Label for this zone:")
-                z["name"] = (name or "Zone").strip() or "Zone" if ok else "Zone"
+                z["name"] = "Zone"  # created instantly; rename inline later
                 # new zones auto-keep their icons by default
                 z["pin"] = True
                 z["icons"] = self.hooks["capture_icons"](z)
@@ -451,14 +452,71 @@ class ZoneOverlay(QWidget):
 
     # ---------- zone actions ----------
     def _rename(self, zone):
+        """Inline rename: an edit box appears right in the title pill.
+        Enter or clicking away saves, Esc cancels."""
+        if self._editor:
+            return
         self.busy = True
-        name, ok = QInputDialog.getText(None, "Rename zone", "New label:",
-                                        text=zone.get("name", ""))
+        self.hover_zone = zone
+        if self.locked:
+            # the overlay normally refuses focus; allow it while typing
+            self.setWindowFlag(Qt.WindowDoesNotAcceptFocus, False)
+            self.show()
+            self._apply_base_styles(click_through=False)
+        pill, _gear, _ = self._label_geom(zone)
+        color = zone.get("color", "#4FC3F7")
+        edit = QLineEdit(self)
+        self._editor = edit
+        self._edit_zone = zone
+        edit.setText(zone.get("name", ""))
+        edit.setFont(self.label_font)
+        edit.setGeometry(pill.adjusted(0, -2, round(80 * self.s), 2))
+        edit.setStyleSheet(
+            f"QLineEdit {{ background: #14181d; color: #FFFFFF;"
+            f" border: 2px solid {color}; border-radius: 4px;"
+            f" padding: 1px 6px; }}")
+        edit.returnPressed.connect(self._commit_rename)
+        edit.installEventFilter(self)
+        edit.show()
+        edit.setFocus()
+        edit.selectAll()
+        self.activateWindow()
+        self.update()
+
+    def eventFilter(self, obj, ev):
+        if obj is self._editor:
+            if ev.type() == QEvent.KeyPress and ev.key() == Qt.Key_Escape:
+                self._end_rename()
+                return True
+            if ev.type() == QEvent.FocusOut:
+                self._commit_rename()
+                return True
+        return super().eventFilter(obj, ev)
+
+    def _commit_rename(self):
+        edit, zone = self._editor, self._edit_zone
+        if not edit:
+            return
+        name = edit.text().strip()
+        if name and zone:
+            zone["name"] = name
+        self._end_rename()
+
+    def _end_rename(self):
+        edit = self._editor
+        self._editor = None
+        self._edit_zone = None
+        if edit:
+            edit.removeEventFilter(self)
+            edit.deleteLater()
+        if self.locked:
+            self.setWindowFlag(Qt.WindowDoesNotAcceptFocus, True)
+            self.show()
+            self._apply_base_styles(click_through=True)
+            self._pin_bottom()
         self.busy = False
-        if ok and name is not None:
-            zone["name"] = name.strip() or zone.get("name", "Zone")
-            self.update()
-            self.hooks["changed"]()
+        self.update()
+        self.hooks["changed"]()
 
     def _set_icon(self, zone):
         self.busy = True
