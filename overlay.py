@@ -227,6 +227,13 @@ class ZoneOverlay(QWidget):
         return None, None, ()
 
     def _zone_under(self, x, y):
+        # the visible label/gear of the hovered zone counts as "inside" —
+        # otherwise moving onto the tag (drawn above the zone) hides it
+        if self.hover_zone and self.hover_zone in self.zones:
+            pill, gear, _ = self._label_geom(self.hover_zone)
+            hot = pill.united(gear).adjusted(-6, -6, 6, 6)
+            if hot.contains(x, y):
+                return self.hover_zone
         for z in reversed(self.zones):
             r = self._z_rect(z).adjusted(-EDGE, -EDGE, EDGE, EDGE)
             if r.contains(x, y):
