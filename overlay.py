@@ -30,9 +30,10 @@ SM_YVIRTUALSCREEN = 77
 SM_CXVIRTUALSCREEN = 78
 SM_CYVIRTUALSCREEN = 79
 
-WM_NCHITTEST = 0x0084
-HTCLIENT = 1
-HTTRANSPARENT = -1
+GWL_EXSTYLE = -20
+WS_EX_TRANSPARENT = 0x00000020
+WS_EX_TOOLWINDOW = 0x00000080
+WS_EX_NOACTIVATE = 0x08000000
 
 HWND_TOPMOST = -1
 HWND_BOTTOM = 1
@@ -48,7 +49,12 @@ EDGE = 6
 MIN_SIZE = 60
 SNAP = 8
 PIN_MS = 2000
-HOVER_MS = 120
+HOVER_MS = 60
+
+if ctypes.sizeof(ctypes.c_void_p) == 8:
+    _get_long, _set_long = user32.GetWindowLongPtrW, user32.SetWindowLongPtrW
+else:
+    _get_long, _set_long = user32.GetWindowLongW, user32.SetWindowLongW
 
 
 def virtual_screen():
@@ -94,13 +100,38 @@ class ZoneOverlay(QWidget):
         self.guides = []
         self.hover_zone = None
 
+        self._click_through = None  # tracked WS_EX_TRANSPARENT state
+
         self.pin_timer = QTimer(self, interval=PIN_MS, timeout=self._pin_bottom)
         self.pin_timer.start()
         self.hover_timer = QTimer(self, interval=HOVER_MS, timeout=self._hover_poll)
         self.hover_timer.start()
 
         self.show()
+        self._apply_base_styles(click_through=True)
         self._pin_bottom()
+
+    # ---------- OS-level input pass-through ----------
+    def _apply_base_styles(self, click_through):
+        """(Re)apply ex-styles — needed after every setWindowFlag() call,
+        which recreates the native window."""
+        hwnd = int(self.winId())
+        ex = _get_long(hwnd, GWL_EXSTYLE) | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE
+        self._click_through = None  # force re-apply below
+        _set_long(hwnd, GWL_EXSTYLE, ex)
+        self._set_click_through(click_through)
+
+    def _set_click_through(self, enabled):
+        """Qt6 translucent windows swallow input even on transparent pixels,
+        so click-through is done by toggling WS_EX_TRANSPARENT: on when the
+        cursor is over nothing interactive, off when over a label/gear/border."""
+        if enabled == self._click_through:
+            return
+        self._click_through = enabled
+        hwnd = int(self.winId())
+        ex = _get_long(hwnd, GWL_EXSTYLE)
+        ex = (ex | WS_EX_TRANSPARENT) if enabled else (ex & ~WS_EX_TRANSPARENT)
+        _set_long(hwnd, GWL_EXSTYLE, ex)
 
     # ---------- z-order ----------
     def _pin_bottom(self):
@@ -118,6 +149,7 @@ class ZoneOverlay(QWidget):
         self.setWindowFlag(Qt.WindowDoesNotAcceptFocus, False)
         self.setWindowFlag(Qt.WindowStaysOnTopHint, True)
         self.show()
+        self._apply_base_styles(click_through=False)
         self.activateWindow()
         self.setFocus()
         self.update()
@@ -132,6 +164,7 @@ class ZoneOverlay(QWidget):
         self.setWindowFlag(Qt.WindowStaysOnTopHint, False)
         self.setWindowFlag(Qt.WindowDoesNotAcceptFocus, True)
         self.show()
+        self._apply_base_styles(click_through=True)
         self._pin_bottom()
         self.update()
         self.hooks["changed"]()
@@ -200,31 +233,18 @@ class ZoneOverlay(QWidget):
                 return z
         return None
 
-    # ---------- native hit test: desktop stays clickable ----------
-    def nativeEvent(self, eventType, message):
-        if eventType == b"windows_generic_MSG":
-            msg = wintypes.MSG.from_address(int(message))
-            if msg.message == WM_NCHITTEST:
-                if not self.locked or self.mode:
-                    return True, HTCLIENT
-                sx = ctypes.c_short(msg.lParam & 0xFFFF).value
-                sy = ctypes.c_short((msg.lParam >> 16) & 0xFFFF).value
-                x, y = sx - self.vx, sy - self.vy
-                zone, kind, _ = self._element_at(x, y)
-                if zone:
-                    return True, HTCLIENT
-                return True, HTTRANSPARENT
-        return super().nativeEvent(eventType, message)
-
-    # ---------- hover ----------
+    # ---------- hover + input toggle ----------
     def _hover_poll(self):
-        if not self.locked or self.busy:
+        if not self.locked or self.busy or self.mode:
             return
         p = QCursor.pos()
-        z = self._zone_under(p.x() - self.vx, p.y() - self.vy)
+        x, y = p.x() - self.vx, p.y() - self.vy
+        z = self._zone_under(x, y)
         if z is not self.hover_zone:
             self.hover_zone = z
             self.update()
+        zone, _kind, _ = self._element_at(x, y)
+        self._set_click_through(zone is None)
 
     # ---------- snapping ----------
     def _snap_targets(self, exclude):
