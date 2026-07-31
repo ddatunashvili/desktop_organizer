@@ -591,6 +591,13 @@ class ZoneOverlay(QWidget):
             del saved[16:]
             self.hooks["changed"]()
 
+    def _fit_zone(self, zone):
+        f = self.hooks.get("fit_zone")
+        if f:
+            f(zone)
+            self.update()
+            self.hooks["changed"]()
+
     def _toggle_pin(self, zone):
         if zone.get("pin"):
             zone["pin"] = False
@@ -636,6 +643,8 @@ class ZoneOverlay(QWidget):
         m.addSeparator()
         m.addAction("Rename...", lambda: self._rename(zone))
         m.addAction("Set icon (emoji)...", lambda: self._set_icon(zone))
+        m.addAction("Fit zone to icons (equal padding)",
+                    lambda: self._fit_zone(zone))
 
         shapes = m.addMenu("Shape")
         for key, label in (("rect", "Rectangle"), ("round", "Rounded rectangle"),

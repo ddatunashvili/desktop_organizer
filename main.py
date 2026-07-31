@@ -201,6 +201,7 @@ class App:
             "drag_start": self.zone_drag_start,
             "drag_update": self.zone_dragging,
             "area_free": self.area_free,
+            "fit_zone": self.fit_zone,
         }, ui_scale=self.ui_scale)
 
     def show_panel(self):
@@ -279,6 +280,28 @@ class App:
                   for k in z.get("icons", {})}
         return {key: [sx, sy] for key, _i, sx, sy in items
                 if zone_contains(zone, sx, sy) and key not in others}
+
+    def fit_zone(self, zone):
+        """Resize the zone to its icons' bounding box with EQUAL padding on
+        all four sides (based on the outermost icons)."""
+        PAD, ICON_W, ICON_H = 14, 80, 92  # match the overlay's hug metrics
+        try:
+            items = self.icons().keyed_icons()
+        except RuntimeError:
+            return
+        kept = set(zone.get("icons", {})) if zone.get("pin") else set()
+        pts = [(sx, sy) for key, _i, sx, sy in items
+               if (key in kept if kept else zone_contains(zone, sx, sy))]
+        if not pts:
+            return
+        x1 = min(p[0] for p in pts) - PAD
+        y1 = min(p[1] for p in pts) - PAD
+        x2 = max(p[0] for p in pts) + ICON_W + PAD
+        y2 = max(p[1] for p in pts) + ICON_H + PAD
+        zone["x"], zone["y"] = x1, y1
+        zone["w"], zone["h"] = max(60, x2 - x1), max(60, y2 - y1)
+        config.save(self.cfg)
+        self.overlay.update()
 
     def area_free(self, zone):
         """True when no foreign icons sit inside the zone's current rect —
