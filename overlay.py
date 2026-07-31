@@ -546,9 +546,6 @@ class ZoneOverlay(QWidget):
             a = shapes.addAction(label, lambda k=key: self._set_shape(zone, k))
             a.setCheckable(True)
             a.setChecked(shape == key)
-        shapes.addSeparator()
-        shapes.addAction(f"Border radius... ({zone.get('radius', 10)} px)",
-                         lambda: self._set_radius(zone))
 
         colors = m.addMenu("Color")
         for col in config.ZONE_COLORS:
@@ -569,6 +566,11 @@ class ZoneOverlay(QWidget):
             a = titles.addAction(label, lambda c=col: self._set_title_color(zone, c))
             a.setCheckable(True)
             a.setChecked(tcol == col)
+
+        m.addAction(f"Border radius... ({zone.get('radius', 10)} px)",
+                    lambda: self._set_radius(zone))
+        m.addAction(f"Background opacity... ({zone.get('bg_opacity', 0)} %)",
+                    lambda: self._set_bg_opacity(zone))
 
         m.addSeparator()
         a = m.addAction("Auto-keep icons in zone", lambda: self._toggle_pin(zone))
@@ -592,25 +594,23 @@ class ZoneOverlay(QWidget):
         self.update()
         self.hooks["changed"]()
 
-    def _set_radius(self, zone):
-        """Radius dialog with live preview — the zone re-renders while the
-        slider/spinbox value changes."""
-        orig_rad = zone.get("radius", 10)
-        orig_shape = zone.get("shape", "rect")
-
+    def _live_slider(self, title, initial, on_preview, on_cancel, suffix=" px",
+                     maximum=100):
+        """Slider + spinbox dialog; on_preview(v) fires on every change so the
+        zone re-renders live. Returns True if accepted."""
         dlg = QDialog()
-        dlg.setWindowTitle("Border radius")
+        dlg.setWindowTitle(title)
         dlg.setWindowFlag(Qt.WindowStaysOnTopHint, True)
         lay = QVBoxLayout(dlg)
 
         row = QHBoxLayout()
         slider = QSlider(Qt.Horizontal)
-        slider.setRange(0, 100)
-        slider.setValue(orig_rad)
+        slider.setRange(0, maximum)
+        slider.setValue(initial)
         spin = QSpinBox()
-        spin.setRange(0, 100)
-        spin.setValue(orig_rad)
-        spin.setSuffix(" px")
+        spin.setRange(0, maximum)
+        spin.setValue(initial)
+        spin.setSuffix(suffix)
         row.addWidget(slider, 1)
         row.addWidget(spin)
         lay.addLayout(row)
@@ -630,9 +630,7 @@ class ZoneOverlay(QWidget):
             spin.setValue(v)
             slider.blockSignals(False)
             spin.blockSignals(False)
-            zone["radius"] = v
-            zone["shape"] = "round"  # radius implies rounded rectangle
-            self.update()
+            on_preview(v)
 
         slider.valueChanged.connect(preview)
         spin.valueChanged.connect(preview)
@@ -644,10 +642,38 @@ class ZoneOverlay(QWidget):
         self.busy = False
         if accepted:
             self.hooks["changed"]()
-        else:  # revert the live preview
+        else:
+            on_cancel()
+            self.update()
+        return accepted
+
+    def _set_radius(self, zone):
+        orig_rad = zone.get("radius", 10)
+        orig_shape = zone.get("shape", "rect")
+
+        def preview(v):
+            zone["radius"] = v
+            zone["shape"] = "round"  # radius implies rounded rectangle
+            self.update()
+
+        def cancel():
             zone["radius"] = orig_rad
             zone["shape"] = orig_shape
+
+        self._live_slider("Border radius", orig_rad, preview, cancel)
+
+    def _set_bg_opacity(self, zone):
+        orig = zone.get("bg_opacity", 0)
+
+        def preview(v):
+            zone["bg_opacity"] = v
             self.update()
+
+        def cancel():
+            zone["bg_opacity"] = orig
+
+        self._live_slider("Background opacity", orig, preview, cancel,
+                          suffix=" %")
 
     def _set_title_color(self, zone, col):
         zone["title_color"] = col
@@ -689,10 +715,14 @@ class ZoneOverlay(QWidget):
 
             if not self.locked:
                 p.fillPath(path, QColor(32, 38, 46, 220))
-            elif hovered:
-                fill = QColor(color)
-                fill.setAlpha(30)  # soft translucent wash on hover
-                p.fillPath(path, fill)
+            else:
+                alpha = round(z.get("bg_opacity", 0) * 2.55)
+                if hovered:
+                    alpha = min(255, alpha + 30)  # soft extra wash on hover
+                if alpha:
+                    fill = QColor(color)
+                    fill.setAlpha(alpha)
+                    p.fillPath(path, fill)
 
             pen = QPen(color, 2)
             p.setPen(pen)
