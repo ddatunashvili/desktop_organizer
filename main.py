@@ -140,6 +140,7 @@ class App:
         self.last_key = resolution_key()
         self._di = None
         self._drag_icons = {}  # base positions captured at zone-drag start
+        self._miss = {}        # (zone id, icon key) -> consecutive missing ticks
 
         self.ui_scale = max(1.0, ctypes.windll.user32.GetDpiForSystem() / 96.0)
 
@@ -391,8 +392,17 @@ class App:
             zone_dirty = False
             for key, pos in list(kept.items()):
                 cur = items.get(key)
+                mk = (id(zone), key)
                 if cur is None:
-                    continue  # icon gone (deleted/renamed); keep the slot
+                    # icon gone (deleted/renamed): tolerate briefly, then
+                    # forget it so its old spot stops stretching the border
+                    self._miss[mk] = self._miss.get(mk, 0) + 1
+                    if self._miss[mk] >= 5:  # ~10 s absent
+                        del kept[key]
+                        self._miss.pop(mk, None)
+                        cfg_dirty = zone_dirty = True
+                    continue
+                self._miss.pop(mk, None)
                 idx, sx, sy = cur
                 if zone_contains(zone, sx, sy):
                     if [sx, sy] != pos:  # rearranged inside its zone -> remember
