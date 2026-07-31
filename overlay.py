@@ -228,6 +228,10 @@ class ZoneOverlay(QWidget):
                 return z, "edge", edges
         return None, None, ()
 
+    def _drag_mode(self):
+        f = self.hooks.get("drag_mode")
+        return bool(f and f())
+
     def _zone_under(self, x, y):
         # the visible label/gear of the hovered zone counts as "inside" —
         # otherwise moving onto the tag (drawn above the zone) hides it
@@ -344,7 +348,8 @@ class ZoneOverlay(QWidget):
             if kind == "gear":
                 self._menu(zone)
             elif kind == "label":
-                if zone.get("resizable", True):
+                # size-locked zones still move when dragging mode is on
+                if zone.get("resizable", True) or self._drag_mode():
                     self.mode, self.target = "move", zone
                     self.orig = (zone["x"], zone["y"])
                 else:
@@ -356,7 +361,7 @@ class ZoneOverlay(QWidget):
         z, edges = self._hit_unlocked(x, y)
         if z and edges:
             self._start_resize(z, edges)
-        elif z and z.get("resizable", True):
+        elif z and (z.get("resizable", True) or self._drag_mode()):
             self.mode, self.target = "move", z
             self.orig = (z["x"], z["y"])
         elif z:
@@ -426,7 +431,7 @@ class ZoneOverlay(QWidget):
                 z["icons"] = self.hooks["capture_icons"](z)
         elif mode == "move" and orig:
             dx, dy = z["x"] - orig[0], z["y"] - orig[1]
-            if (dx or dy) and z.get("pin"):
+            if dx or dy:  # main decides what travels (pinned / dragging mode)
                 self.hooks["zone_moved"](z, dx, dy)
         self.update()
         self.hooks["changed"]()

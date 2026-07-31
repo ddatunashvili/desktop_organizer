@@ -79,7 +79,7 @@ class ControlPanel(QWidget):
         super().__init__()
         self.app = app
         self.setWindowTitle("Desktop Grid")
-        self.setFixedSize(360, 330)
+        self.setFixedSize(360, 360)
         self.setWindowFlag(Qt.WindowStaysOnTopHint, True)
 
         lay = QVBoxLayout(self)
@@ -115,6 +115,11 @@ class ControlPanel(QWidget):
         self.autostart_chk.setChecked(app.is_autostart())
         self.autostart_chk.toggled.connect(app.set_autostart)
         lay.addWidget(self.autostart_chk)
+
+        self.drag_chk = QCheckBox("Dragging mode: moving a zone moves its icons")
+        self.drag_chk.setChecked(app.cfg.get("drag_mode", False))
+        self.drag_chk.toggled.connect(app.toggle_drag_mode)
+        lay.addWidget(self.drag_chk)
 
         hint = QLabel("Closing this window keeps Desktop Grid running in the tray.")
         hint.setStyleSheet("color: #889; font-size: 11px;")
@@ -191,6 +196,7 @@ class App:
             "zone_moved": self.zone_moved,
             "custom_colors": self.cfg.setdefault("custom_colors", []),
             "font_family": self.font_family,
+            "drag_mode": lambda: self.cfg.get("drag_mode", False),
         }, ui_scale=self.ui_scale)
 
     def show_panel(self):
@@ -271,20 +277,39 @@ class App:
                 if zone_contains(zone, sx, sy) and key not in others}
 
     def zone_moved(self, zone, dx, dy):
-        kept = zone.get("icons", {})
-        if not kept:
+        """Zone dragged: pinned zones carry their kept icons; in dragging
+        mode every icon that sat inside the zone travels with it too."""
+        pinned = bool(zone.get("pin"))
+        drag = self.cfg.get("drag_mode", False)
+        if not (pinned or drag):
             return
-        for k in kept:
-            kept[k] = [kept[k][0] + dx, kept[k][1] + dy]
         try:
             di = self.icons()
             positions = {key: (i, sx, sy) for key, i, sx, sy in di.keyed_icons()}
-            for key, pos in kept.items():
-                if key in positions:
-                    di.set_position_screen(positions[key][0], pos[0], pos[1])
-            di.redraw()
         except RuntimeError:
-            pass
+            return
+        targets = {}
+        if pinned:
+            kept = zone.setdefault("icons", {})
+            for k, p in list(kept.items()):
+                kept[k] = [p[0] + dx, p[1] + dy]
+                targets[k] = kept[k]
+        if drag:
+            old = {"x": zone["x"] - dx, "y": zone["y"] - dy,
+                   "w": zone["w"], "h": zone["h"]}
+            for key, (_i, sx, sy) in positions.items():
+                if key not in targets and zone_contains(old, sx, sy):
+                    targets[key] = [sx + dx, sy + dy]
+                    if pinned:
+                        zone["icons"][key] = targets[key]
+        moved = False
+        for key, pos in targets.items():
+            cur = positions.get(key)
+            if cur:
+                di.set_position_screen(cur[0], pos[0], pos[1])
+                moved = True
+        if moved:
+            di.redraw()
 
     # ---- per-zone icon enforcement ----
     def enforce_loop(self):
@@ -368,6 +393,10 @@ class App:
 
     def toggle_auto(self, checked):
         self.cfg["auto_restore"] = bool(checked)
+        config.save(self.cfg)
+
+    def toggle_drag_mode(self, checked):
+        self.cfg["drag_mode"] = bool(checked)
         config.save(self.cfg)
 
     # ---- display change watcher ----
