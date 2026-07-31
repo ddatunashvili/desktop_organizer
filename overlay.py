@@ -252,6 +252,14 @@ class ZoneOverlay(QWidget):
         f = self.hooks.get("drag_mode")
         return bool(f and f())
 
+    def _fit_before_drag(self, zone):
+        """Moving a zone auto-sizes it to its icons first (equal padding);
+        the fitted size is saved and is what gets dragged."""
+        if zone.get("pin") and zone.get("icons"):
+            f = self.hooks.get("fit_zone")
+            if f:
+                f(zone)
+
     def _begin_icon_drag(self, zone):
         self._last_icon_emit = 0.0
         self.place_ok = True
@@ -416,6 +424,7 @@ class ZoneOverlay(QWidget):
             elif kind == "label":
                 # size-locked zones still move when dragging mode is on
                 if zone.get("resizable", True) or self._drag_mode():
+                    self._fit_before_drag(zone)
                     self.mode, self.target = "move", zone
                     self.orig = (zone["x"], zone["y"])
                     self._mark_valid(zone)
@@ -430,6 +439,7 @@ class ZoneOverlay(QWidget):
         if z and edges:
             self._start_resize(z, edges)
         elif z and (z.get("resizable", True) or self._drag_mode()):
+            self._fit_before_drag(z)
             self.mode, self.target = "move", z
             self.orig = (z["x"], z["y"])
             self._mark_valid(z)
