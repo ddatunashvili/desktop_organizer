@@ -161,7 +161,8 @@ class App:
         self.qapp.setWindowIcon(icon)
         self.panel = ControlPanel(self)
         self.panel.setWindowIcon(icon)
-        self.panel.show()
+        if "--tray" not in sys.argv:
+            self.panel.show()
         self.overlay = self._make_overlay()
 
         self.tray = QSystemTrayIcon(icon)
@@ -217,14 +218,14 @@ class App:
                 pass
             return
         if getattr(sys, "frozen", False):  # packaged exe
-            target, args = sys.executable, ""
+            target, args = sys.executable, "--tray"
             workdir = os.path.dirname(sys.executable)
         else:
             target = os.path.join(os.path.dirname(sys.executable), "pythonw.exe")
             if not os.path.exists(target):
                 target = sys.executable
             script = os.path.abspath(__file__)
-            args = f'"{script}"'
+            args = f'"{script}" --tray'
             workdir = os.path.dirname(script)
         ps = (f"$ws = New-Object -ComObject WScript.Shell; "
               f"$l = $ws.CreateShortcut('{lnk}'); "
