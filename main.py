@@ -22,9 +22,9 @@ except (AttributeError, OSError):
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QColor, QFontDatabase, QIcon, QPainter, QPen, QPixmap
-from PySide6.QtWidgets import (QApplication, QCheckBox, QLabel, QMenu,
-                               QMessageBox, QPushButton, QSystemTrayIcon,
-                               QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QApplication, QCheckBox, QHBoxLayout, QLabel,
+                               QMenu, QMessageBox, QPushButton,
+                               QSystemTrayIcon, QVBoxLayout, QWidget)
 
 import config
 from desktop_icons import DesktopIcons
@@ -79,7 +79,7 @@ class ControlPanel(QWidget):
         super().__init__()
         self.app = app
         self.setWindowTitle("Desktop Grid")
-        self.setFixedSize(360, 330)
+        self.setFixedSize(360, 360)
         self.setWindowFlag(Qt.WindowStaysOnTopHint, True)
 
         lay = QVBoxLayout(self)
@@ -121,6 +121,20 @@ class ControlPanel(QWidget):
         hint.setWordWrap(True)
         hint.setAlignment(Qt.AlignCenter)
         lay.addWidget(hint)
+
+        footer = QHBoxLayout()
+        footer.addStretch()
+        logo_404 = resource_path("404friends.png")
+        if os.path.exists(logo_404):
+            logo_lbl = QLabel()
+            logo_lbl.setPixmap(QPixmap(logo_404).scaled(
+                20, 20, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            footer.addWidget(logo_lbl)
+        author = QLabel("by 404friends")
+        author.setStyleSheet("color: #889; font-size: 11px;")
+        footer.addWidget(author)
+        footer.addStretch()
+        lay.addLayout(footer)
 
     def closeEvent(self, event):  # close = minimize to tray
         event.ignore()
